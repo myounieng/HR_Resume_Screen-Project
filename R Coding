@@ -1,0 +1,184 @@
+#Clean data
+```{r}
+finmajor <- grepl('finance', dataset$Major, ignore.case=T)
+econmajor <- grepl('econ', dataset$Major, ignore.case=T)
+enginmajor <- grepl('engin', dataset$Major, ignore.case=T)
+mathmajor <- grepl('math', dataset$Major, ignore.case=T)
+accmajor <- grepl('account', dataset$Major, ignore.case=T)
+
+dataset$finmajor<-ifelse(finmajor==TRUE,1,0)
+dataset$econmajor<-ifelse(econmajor==TRUE,1,0)
+dataset$enginmajor<-ifelse(enginmajor==TRUE,1,0)
+dataset$mathmajor <- ifelse(mathmajor==TRUE,1,0)
+dataset$accmajor <- ifelse(accmajor==TRUE,1,0)
+
+dataset$Score <- as.numeric(dataset$Score)
+
+dataset$SchoolLevel <- as.numeric(factor(dataset$Target.Non.Target, levels=c("Non-Target", "Silver", "Gold", "Platinum"), ordered=TRUE))
+
+dataset$GPA <- as.numeric(dataset$GPA)
+
+isempty4=as.numeric(dataset$words_level_4=="")
+isempty4[is.na(isempty4)]=1
+dataset$filled4=as.factor(1-isempty4)
+
+isempty5=as.numeric(dataset$words_level_5=="")
+isempty5[is.na(isempty5)]=1
+dataset$filled5=as.factor(1-isempty5)
+
+dataset$ToFinal <- ifelse(dataset$Made.it.to.final.round==1,"Yes","No")
+dataset$ToFinal <- as.factor(dataset$ToFinal)
+
+dataset$Made.it.to.final.round <- as.factor(dataset$Made.it.to.final.round)
+```
+
+
+#Manually split data
+```{r}
+Tofinal<- subset(dataset,Made.it.to.final.round ==1)
+NotFinal<- subset(dataset,Made.it.to.final.round ==0)
+NewNo = sample_n(NotFinal,70)
+newdata<- merge(Tofinal,NewNo,all = T)
+```
+
+#Train&Test
+```{r}
+split = sample.split(dataset$Made.it.to.final.round, SplitRatio = 0.85)
+training_set = subset(dataset, split == TRUE)
+test_set = subset(dataset, split == FALSE)
+```
+
+#Fit model
+```{r}
+model1= glm(Made.it.to.final.round ~ finmajor+econmajor+enginmajor+mathmajor+accmajor+Score+SchoolLevel+GPA+filled5+filled4,
+            data = training_set, family = binomial )
+
+exp(coefficients(model1))
+```
+
+```{r}
+pred = predict(model1, data=test_set, type = "response")
+predprob <- ifelse(pred>0.5,'Yes','No')
+table(predprob)
+hist(pred)
+```
+
+```{r}
+NotFinal<- subset(test_set,Made.it.to.final.round ==0)
+NewTest = sample_n(NotFinal,70)
+```
+
+
+#Oversampling
+```{r}
+
+library(caret)
+
+X=subset(training_set, select=c(finmajor,econmajor,enginmajor,mathmajor,accmajor,GPA))
+Y=training_set$ToFinal
+
+ctrl=trainControl(method="repeatedcv", repeats=5, summaryFunction=twoClassSummary, sampling="up")
+
+model=train(x=X, y=Y, method="rpart", preProcess="medianImpute", trControl=ctrl)
+```
+
+```{r}
+library(caret)
+set.seed(123)
+up_train <- upSample(x = dataset[, -ncol(dataset)],
+                     y = dataset$Made.it.to.final.round)                         
+table(up_train$Class)
+```
+
+```{r}
+NewNo = sample_n(NotFinal,70)
+newdata<- merge(Tofinal,NewNo,all = T)
+```
+
+```{r}
+up_model<- glm(Made.it.to.final.round ~ finmajor+econmajor+enginmajor+mathmajor+accmajor+Score+SchoolLevel+GPA+filled5+filled4,
+            data = up_train, family = binomial )
+exp(coefficients(up_model))
+```
+
+```{r}
+up_pred = predict(up_model, data=test_set, type = "response")
+predprob <- ifelse(pred>0.5,'Yes','No')
+table(predprob)
+hist(up_pred)
+```
+
+
+```{r}
+
+library('ROSE')
+
+m=median(training_set$Score[!is.na(training_set$Score)])
+training_set$Score[is.na(training_set$Score)]=m
+
+
+
+#generate new balanced data by ROSE
+#training_set$ToFinal[training_set$ToFinal=="Yes"]=
+
+data.new <- ovun.sample(cls ~.,
+            data = hacide.train, method = 'over',  N=1523)$data
+
+
+data.new <- ovun.sample(Made.it.to.final.round ~.-filled5-filled4,
+            data = sub, method = 'both',  N=2000)$data
+
+data.new <- ROSE(ToFinal ~ finmajor+econmajor+enginmajor+mathmajor+accmajor+Score+SchoolLevel+filled5+filled4,
+            data = training_set, N=)$data
+
+#check (im)balance of new data
+table(data.new)
+
+#train logistic regression on balanced data
+log.reg.bal <- glm(Made.it.to.final.round ~         finmajor+econmajor+enginmajor+mathmajor+accmajor+Score+SchoolLevel+GPA+filled5+filled4, data=data.new, family=binomial)
+
+#use the trained model to predict test data
+pred.log.reg.bal <- predict(log.reg.bal, newdata=test, type="response")
+predprob.log.reg.bal <- ifelse(pred.log.reg.bal>0.5,'1','0')
+table(predprob.log.reg.bal)
+```
+
+#Lasso
+```{r}
+newf <- finalf[, colSums(is.na(finalf)) == 0]
+split = sample.split(newf$Made.it.to.final.round, SplitRatio = 0.85)
+training = subset(newf, split == TRUE)
+test = subset(newf, split == FALSE)
+```
+
+```{r}
+#newf <- training[, colSums(is.na(training)) == 0]
+set.seed(123)
+model = train(Made.it.to.final.round ~.-CanID, data=training, method='lasso', 
+              trControl=trainControl(method = "cv", number = 5,verboseIter = TRUE))
+pred<- predict(model,test)
+predprob <- ifelse(pred>0.5,'Yes','No')
+#confusionMatrix(predprob,test$Made.it.to.final.round,positive = 'Yes')
+```
+
+```{r}
+data.new <- ovun.sample(Made.it.to.final.round ~.-CanID,
+            data = training, method = 'both',  N=1579,p=0.5)$data
+
+newdata<- rbind(data.new,test)
+
+
+X=model.matrix(Made.it.to.final.round ~.-CanID, newdata)[,-1]
+trainX=X[1:1579,]
+testX=X[1580:1858,]
+
+```
+
+```{r}
+#new.model<- train(Made.it.to.final.round ~.-CanID, data=, method='lasso', 
+   #           trControl=trainControl(method = "cv", number = 10,verboseIter = TRUE))
+new.model<- cv.glmnet(trainX,data.new$Made.it.to.final.round, family="binomial",alpha=1)
+new.pred<- predict(new.model,testX,type="response")
+new.predprob <- ifelse(new.pred>0.5,'Yes','No')
+confusionMatrix(new.predprob,test$Made.it.to.final.round)
+```
